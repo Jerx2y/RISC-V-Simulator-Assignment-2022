@@ -184,7 +184,10 @@ struct BranchPredictor {
         if (val) { if (cnt[pos & 65535] < 3) ++cnt[pos]; }
         else { if (cnt[pos & 65535] > 0) --cnt[pos]; }
     }
-    bool predict(u32 pos) { return cnt[pos & 65535] & 2; }
+    bool predict(u32 pos) {
+        return false;
+        return cnt[pos & 65535] & 2;
+    }
 };
 
 class Simulator {
@@ -336,6 +339,7 @@ public:
         if (!tmp.ready) return ;
         if (tmp.dest == -1) { // halt
             cout << std::dec << (reg.get(10) & 255u) << endl;
+            std::cerr << "clock: " << clk << endl;
             exit(0);
         } else if (tmp.dest < 0) { // branch
             // cout << " !! "<< RoB.pre.hd + 1 << " " <<tmp.npc << " " << tmp.value << endl;
@@ -348,21 +352,26 @@ public:
                 RoB.clean();
                 ALU.clean();
                 MC.clean();
+                rpc = -1;
+                // cout << " @@@ " << lsbus.name << " " << alubus.name << endl;
                 lsbus.name = -127;
                 alubus.name = -127;
             }
+            RoB.now.pop_front();
         } else if (tmp.dest == 32) { // JALR
             // have updated pc in listen();
+            RoB.now.pop_front();
         } else if (tmp.dest >= 256) { // store mem
             LSB.setready(tmp.dest - 256);
+            if (LSB.pre.q[tmp.dest - 256].Qj == -1 && LSB.pre.q[tmp.dest - 256].Qk == -1) RoB.now.pop_front();
         } else { // register
             reg.vnow[tmp.dest] = tmp.value;
             // if (tmp.dest == 15)
                 // cout << std::dec<< tmp.value << " @@ " << RoB.pre.hd + 1 << endl;
             if (reg.getr(tmp.dest) == (RoB.pre.hd + 1) % ROB_SIZE) // only equal can update
                 reg.rnow[tmp.dest] = -1;
+            RoB.now.pop_front();
         }
-        RoB.now.pop_front();
     }
 
     void run_rs() {
@@ -412,9 +421,9 @@ public:
 
     void issue() {
 
-        if (rpc != -1 || RoB.full() || RS.full() || LSB.full()) return ;
+        // cout << std::hex << pc << " "<< std::dec << rpc << " "<< RoB.full() << " " << RS.full() << " " << LSB.full() << endl;
 
-        // cout << std::hex << pc << endl;
+        if (rpc != -1 || RoB.full() || RS.full() || LSB.full()) return ;
 
         InsNode ins;
         instructionDecode(mem, pc, ins);
@@ -475,6 +484,12 @@ public:
             else if (rpos == alubus.name) tmp.Vj = alubus.val;
             else tmp.Qj = rpos;
             tmp.Vk = ins.imm;
+            // if (pc == 0x1144) {
+            //     cout << " @ " << " " << tmp.Vj << " " << tmp.Qj << " " << tmp.Vk << endl;
+            //     cout << RoB.pre.hd + 1 << " @ " << RoB.pre.tl << endl;
+            //     for (int i = 0; i < 64; ++i)
+            //         if (RS.pre[i].busy && RS.pre[i].name == tmp.Qj) cout << " # # # " << endl;
+            // }
             RS.push(tmp);
             ReorderBuffer::node now;
             now.dest = ins.rd;
@@ -501,6 +516,8 @@ public:
             else if (rpos == alubus.name) tmp.Vk = alubus.val;
             else tmp.Qk = rpos;
             RS.push(tmp);
+
+            // cout << name << " ## " << endl;
 
             ReorderBuffer::node now;
             now.dest = -pc;
@@ -577,6 +594,7 @@ public:
             lsb.Vk = name;
             LSB.push(lsb);
             ReorderBuffer::node rob;
+
             rob.dest = ins.rd;
             reg.setr(ins.rd, name);
             RoB.push(rob);
