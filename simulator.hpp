@@ -185,7 +185,6 @@ struct BranchPredictor {
         else { if (cnt[pos & 65535] > 0) --cnt[pos]; }
     }
     bool predict(u32 pos) {
-        return false;
         return cnt[pos & 65535] & 2;
     }
 };
@@ -339,7 +338,7 @@ public:
         if (!tmp.ready) return ;
         if (tmp.dest == -1) { // halt
             cout << std::dec << (reg.get(10) & 255u) << endl;
-            std::cerr << "clock: " << clk << endl;
+            // std::cerr << "clock: " << clk << endl;
             exit(0);
         } else if (tmp.dest < 0) { // branch
             // cout << " !! "<< RoB.pre.hd + 1 << " " <<tmp.npc << " " << tmp.value << endl;
