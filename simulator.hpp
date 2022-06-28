@@ -22,7 +22,6 @@ struct Register {
         memset(rnow, -1, sizeof rnow);
     }
     void tick() {
-        // cout << std::dec << vnow[10] << " " << vnow[11] << " ";
         vnow[0] = 0, rnow[0] = -1;
         memcpy(vpre, vnow, sizeof vpre);
         memcpy(rpre, rnow, sizeof rpre);
@@ -151,6 +150,7 @@ public:
         now.x = x, now.y = y, now.op = op, now.name = name, now.stall = 0;
     }
     void stall() { now.stall = 1; }
+    void clean() { now.stall = 1; }
 };
 
 struct MemoryController {
@@ -200,7 +200,7 @@ public:
              *    commit change the now of a register-r to -1;
              *    then the register-r == -1, meaning that the issue is useless.
              *    in a word, the name of new issue must cover -1
-             * 2. branch predictor will clean all the thing issue have write.
+             * 2. branch predictor will clean all the thing issue have written.
              */
         }
     }
@@ -258,6 +258,9 @@ public:
         if (op == OR) bus.val = x | y;
         if (op == AND) bus.val = x & y;
 
+//        if (bus.name == 1)
+//            cout << std::dec<< x << " @ " << y << " @ " << bus.val << " " << OPNAME[op] << endl;
+
         listen(bus);
     }
 
@@ -307,16 +310,16 @@ public:
             // cout << " !! "<< RoB.pre.hd + 1 << " " <<tmp.npc << " " << tmp.value << endl;
             if (tmp.value) { // need to jump: predicted wrong
                 pc = tmp.npc;
-                // LSB.clean();                                  $$$PREEE
-                // reg.clean();
-                // RS.clean();
-                // RoB.clean();
-                // lsbus.name = -127;
-                // alubus.name = -127;
-                // if (31 <= MC.op && MC.op <= 35)
-                //     MC.setstall();                           $$$ PREEE
+                LSB.clean();
+                reg.clean();
+                RS.clean();
+                RoB.clean();
+                ALU.clean();
+                lsbus.name = -127;
+                alubus.name = -127;
+                if (31 <= MC.op && MC.op <= 35)
+                    MC.setstall();
             }
-            rpc = -1; // $$$PREEE
         } else if (tmp.dest == 32) { // JALR
             // have updated pc in listen();
         } else if (tmp.dest >= 256) { // store mem
@@ -342,9 +345,6 @@ public:
     }
 
     void ex_loadstore() {
-        // cout << std::dec<< OPNAME[MC.op] << " !!! " << MC.pos << " " << MC.val << endl;
-        // if (MC.op == SB || MC.op == SH || MC.op == SW)
-        //     cout << OPNAME[MC.op] << std::dec << " " << MC.pos << " " << MC.val << " ### \n";
         if (MC.op == SB)
             return mem.setByte(MC.pos, MC.val);
         if (MC.op == SH)
@@ -363,7 +363,6 @@ public:
             bus.val = mem.getByteUnsigned(MC.pos);
         if (MC.op == LHU)
             bus.val = mem.getHalfwordUnsigned(MC.pos);
-        // cout << OPNAME[MC.op] << std::dec << " " << MC.pos << " " << MC.val << " " << bus.val<< " ### \n";
         listen(bus);
     }
 
@@ -376,7 +375,6 @@ public:
             LSB.pre.pop_front(), LSB.now.pop_front();
         if (!LSB.pre.empty() && LSB.pre.front().ready && LSB.pre.front().Qj == -1 && LSB.pre.front().Qk == -1) {
             MC.set(LSB.pre.front().op, LSB.pre.front().Vj, LSB.pre.front().Vk);
-            // cout << OPNAME[MC.op] << " " << std::dec << MC.pos << " " << MC.val << " $$$ \n";
             LSB.pop();
         } else MC.setstall();
     }
@@ -385,13 +383,12 @@ public:
 
         if (rpc != -1 || RoB.full() || RS.full() || LSB.full()) return ;
 
+        // cout << std::hex << pc << endl;
+
         InsNode ins;
         instructionDecode(mem, pc, ins);
         int name = RoB.getidx();
         u32 delta_pc = 4;
-
-        // cout << std::hex << pc << endl;
-        // cout << std::hex << pc << " " << std::dec << name << endl;
 
         if (ins.type == NONE) // 0
             return ;
@@ -475,15 +472,12 @@ public:
             else if (rpos == alubus.name) tmp.Vk = alubus.val;
             else tmp.Qk = rpos;
 
+            // cout << "##"<< name << endl;
+
             RS.push(tmp);
             ReorderBuffer::node now;
             now.dest = -1;
             now.npc = pc + ins.imm;
-            rpc = name; // ######PRE $$$
-            // if (now.npc == 0x1118)
-            //     cout << " #@@@@@@@@@@@@@@" << pc << " " << name << endl;
-            // if (pc == 0x1104)
-            //     cout << std::dec << name << " " << std::hex<< now.npc << std::dec<< " " << tmp.Vj << " " << tmp.Qk << " # \n";
             RoB.push(now);
         }
 
