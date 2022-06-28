@@ -30,7 +30,10 @@ struct Register {
     int getr(int x) { return rpre[x]; }
     void set(int x, u32 v) { vnow[x] = v; rnow[x] = -1; }
     void setr(int x, int name) { rnow[x] = name; }
-    void clean() { memset(rnow, -1, sizeof rnow); }
+    void clean() {
+        memset(rpre, -1, sizeof rpre);
+        memset(rnow, -1, sizeof rnow);
+    }
 };
 
 template<class T, unsigned int SIZE>
@@ -84,7 +87,7 @@ public:
     }
     void clean() {
         for (int i = 0; i < RS_SIZE; ++i)
-            now[i].busy = false;
+            pre[i].busy = now[i].busy = false;
     }
     bool full() {
         for (int i = 0; i < RS_SIZE; ++i)
@@ -119,6 +122,7 @@ public:
         }
         while (!now.empty() && !now.front().busy)
             pop();
+        pre = now;
     }
 };
 
@@ -134,7 +138,7 @@ public:
     int push(const node &x) { return now.push_back(x); }
     bool full() { return now.full(); }
     int getidx() { return now.getidx(); }
-    void clean() { now.clear(); }
+    void clean() { pre.clear(), now.clear(); }
 };
 
 class ArithmeticLogicUnit {
@@ -150,7 +154,7 @@ public:
         now.x = x, now.y = y, now.op = op, now.name = name, now.stall = 0;
     }
     void stall() { now.stall = 1; }
-    void clean() { now.stall = 1; }
+    void clean() { pre.stall = now.stall = 1; }
 };
 
 struct MemoryController {
@@ -163,10 +167,24 @@ struct MemoryController {
     void set(insMnemonic op_, u32 pos_, u32 val_) {
         op = op_, pos = pos_, val = val_, clk = 2, stall = 0;
     }
+    void clean() {
+        if (31 <= op && op <= 35)
+            setstall();
+    }
 };
 
 struct CommonDataBus {
     int name = -1; u32 val;
+};
+
+struct BranchPredictor {
+    char cnt[65536];
+    BranchPredictor() { memset(cnt, 0, sizeof cnt); }
+    void calc(u32 pos, int val) {
+        if (val) { if (cnt[pos & 65535] < 3) ++cnt[pos]; }
+        else { if (cnt[pos & 65535] > 0) --cnt[pos]; }
+    }
+    bool predict(u32 pos) { return cnt[pos & 65535] & 2; }
 };
 
 class Simulator {
@@ -179,10 +197,26 @@ private:
     ArithmeticLogicUnit ALU;
     MemoryController MC;
     CommonDataBus alubus, lsbus;
-    // InstructionQueue iq;
+    BranchPredictor BP;
     u32 clk = 0, pc = 0;
     int rpc = -1;
 public:
+
+/*
+ * 故事的小黄花
+ * 从出生那年就飘着
+ * 童年的荡秋千
+ * 随 记忆一直晃到现在
+ * 2557176 5677776765
+ * 吹着前奏望着天空
+ * 我想起花瓣试着掉落
+ * 为你翘课的那一天
+ * 风吹的那一天
+ * 教室的那一间
+ * 我怎么看不见
+ * 消失的下雨天
+ * 我好想再淋一遍
+ */
     
     void scanmem() { mem.scan(); }
 
@@ -258,9 +292,6 @@ public:
         if (op == OR) bus.val = x | y;
         if (op == AND) bus.val = x & y;
 
-//        if (bus.name == 1)
-//            cout << std::dec<< x << " @ " << y << " @ " << bus.val << " " << OPNAME[op] << endl;
-
         listen(bus);
     }
 
@@ -303,22 +334,22 @@ public:
         const ReorderBuffer::node &tmp = RoB.pre.front();
         // cout << std::dec << "@" << RoB.pre.hd + 1 << " " << tmp.dest  << " " << tmp.ready << endl;
         if (!tmp.ready) return ;
-        if (tmp.dest == -2) { // halt
+        if (tmp.dest == -1) { // halt
             cout << std::dec << (reg.get(10) & 255u) << endl;
             exit(0);
-        } else if (tmp.dest == -1) { // branch
+        } else if (tmp.dest < 0) { // branch
             // cout << " !! "<< RoB.pre.hd + 1 << " " <<tmp.npc << " " << tmp.value << endl;
-            if (tmp.value) { // need to jump: predicted wrong
-                pc = tmp.npc;
+            if ((tmp.value && tmp.npc >= 0) || (!tmp.value && tmp.npc < 0)) { // need to jump: predicted wrong
+                pc = tmp.npc >= 0 ? tmp.npc : -tmp.npc;
+                BP.calc(-tmp.dest, tmp.value);
                 LSB.clean();
                 reg.clean();
                 RS.clean();
                 RoB.clean();
                 ALU.clean();
+                MC.clean();
                 lsbus.name = -127;
                 alubus.name = -127;
-                if (31 <= MC.op && MC.op <= 35)
-                    MC.setstall();
             }
         } else if (tmp.dest == 32) { // JALR
             // have updated pc in listen();
@@ -395,7 +426,7 @@ public:
 
         if (ins.type == HALT) { // 1
             ReorderBuffer::node now;
-            now.dest = -2;
+            now.dest = -1;
             rpc = -2;
             now.ready = 1;
             RoB.push(now);
@@ -457,27 +488,25 @@ public:
         if (6 <= ins.type && ins.type <= 11) { // Branch
             ReservationStation::node tmp;
             tmp.busy = 1, tmp.op = ins.type, tmp.name = name;
-
             int rpos = reg.getr(ins.rs1);
             if (rpos == -1) tmp.Vj = reg.get(ins.rs1);
             else if (RoB.pre.q[rpos].ready) tmp.Vj = RoB.pre.q[rpos].value;
             else if (rpos == lsbus.name) tmp.Vj = lsbus.val;
             else if (rpos == alubus.name) tmp.Vj = alubus.val;
             else tmp.Qj = rpos;
-
             rpos = reg.getr(ins.rs2);
             if (rpos == -1) tmp.Vk = reg.get(ins.rs2);
             else if (RoB.pre.q[rpos].ready) tmp.Vk = RoB.pre.q[rpos].value;
             else if (rpos == lsbus.name) tmp.Vk = lsbus.val;
             else if (rpos == alubus.name) tmp.Vk = alubus.val;
             else tmp.Qk = rpos;
-
-            // cout << "##"<< name << endl;
-
             RS.push(tmp);
+
             ReorderBuffer::node now;
-            now.dest = -1;
-            now.npc = pc + ins.imm;
+            now.dest = -pc;
+            if (BP.predict(pc)) // predict to jump
+                delta_pc = ins.imm, now.npc = -(pc + 4);
+            else now.npc = pc + ins.imm;
             RoB.push(now);
         }
 
