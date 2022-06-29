@@ -83,7 +83,6 @@ public:
             now[i] = tmp;
             return ;
         }
-        assert(0); // TODO
     }
     void clean() {
         for (int i = 0; i < RS_SIZE; ++i)
@@ -203,22 +202,6 @@ private:
     u32 clk = 0, pc = 0;
     int rpc = -1;
 public:
-
-/*
- * 故事的小黄花
- * 从出生那年就飘着
- * 童年的荡秋千
- * 随 记忆一直晃到现在
- * 2557176 5677776765
- * 吹着前奏望着天空
- * 我想起花瓣试着掉落
- * 为你翘课的那一天
- * 风吹的那一天
- * 教室的那一间
- * 我怎么看不见
- * 消失的下雨天
- * 我好想再淋一遍
- */
     
     void scanmem() { mem.scan(); }
 
@@ -234,8 +217,8 @@ public:
              * commit must be in front of issue, or :
              * 1. issue changed the now of a register-r to name;
              *    commit change the now of a register-r to -1;
-             *    then the register-r == -1, meaning that the issue is useless.
-             *    in a word, the name of new issue must cover -1
+             *    then the register-rename == -1, meaning that the issue is useless.
+             *    in brief, the name of new issue must cover -1
              * 2. branch predictor will clean all the thing issue have written.
              */
         }
@@ -298,22 +281,18 @@ public:
     }
 
     void listen(const CommonDataBus &bus) {
-        // pc
-
         if (bus.name == -127)
             return ;
-
+        // pc
         if (bus.name == -1) {
             rpc = -1, pc = bus.val;
             return ;
         }
-
         // RoB
         if (0 <= bus.name && bus.name < ROB_SIZE) {
             RoB.now.q[bus.name].ready = 1;
             RoB.now.q[bus.name].value = bus.val;
         }
-
         // RS
         for (int i = 0; i < RS_SIZE; ++i) if (RS.pre[i].busy) {
             if (RS.pre[i].Qj == bus.name)
@@ -321,7 +300,6 @@ public:
             if (RS.pre[i].Qk == bus.name)
                 RS.now[i].Qk = -1, RS.now[i].Vk = bus.val;
         }
-
         // LSB
         for (int i = 0; i < LSB_SIZE; ++i) if (LSB.pre.q[i].busy) {
             if (LSB.pre.q[i].Qj == bus.name)
@@ -334,15 +312,12 @@ public:
     void run_rob() { // commit
         if (RoB.pre.empty()) return ;
         const ReorderBuffer::node &tmp = RoB.pre.front();
-        // cout << std::dec << "@" << RoB.pre.hd + 1 << " " << tmp.dest  << " " << tmp.ready << endl;
         if (!tmp.ready) return ;
         if (tmp.dest == -1) { // halt
             cout << std::dec << (reg.get(10) & 255u) << endl;
-            // std::cerr << "clock: " << clk << endl;
             exit(0);
         } else if (tmp.dest < 0) { // branch
-            // cout << " !! "<< RoB.pre.hd + 1 << " " <<tmp.npc << " " << tmp.value << endl;
-            if ((tmp.value && tmp.npc >= 0) || (!tmp.value && tmp.npc < 0)) { // need to jump: predicted wrong
+            if ((tmp.value && tmp.npc >= 0) || (!tmp.value && tmp.npc < 0)) { // need to jump: prediction wrong
                 pc = tmp.npc >= 0 ? tmp.npc : -tmp.npc;
                 BP.calc(-tmp.dest, tmp.value);
                 LSB.clean();
@@ -352,21 +327,17 @@ public:
                 ALU.clean();
                 MC.clean();
                 rpc = -1;
-                // cout << " @@@ " << lsbus.name << " " << alubus.name << endl;
                 lsbus.name = -127;
                 alubus.name = -127;
             }
             RoB.now.pop_front();
         } else if (tmp.dest == 32) { // JALR
-            // have updated pc in listen();
             RoB.now.pop_front();
         } else if (tmp.dest >= 256) { // store mem
             LSB.setready(tmp.dest - 256);
             if (LSB.pre.q[tmp.dest - 256].Qj == -1 && LSB.pre.q[tmp.dest - 256].Qk == -1) RoB.now.pop_front();
         } else { // register
             reg.vnow[tmp.dest] = tmp.value;
-            // if (tmp.dest == 15)
-                // cout << std::dec<< tmp.value << " @@ " << RoB.pre.hd + 1 << endl;
             if (reg.getr(tmp.dest) == (RoB.pre.hd + 1) % ROB_SIZE) // only equal can update
                 reg.rnow[tmp.dest] = -1;
             RoB.now.pop_front();
@@ -419,8 +390,6 @@ public:
     }
 
     void issue() {
-
-        // cout << std::hex << pc << " "<< std::dec << rpc << " "<< RoB.full() << " " << RS.full() << " " << LSB.full() << endl;
 
         if (rpc != -1 || RoB.full() || RS.full() || LSB.full()) return ;
 
@@ -483,12 +452,6 @@ public:
             else if (rpos == alubus.name) tmp.Vj = alubus.val;
             else tmp.Qj = rpos;
             tmp.Vk = ins.imm;
-            // if (pc == 0x1144) {
-            //     cout << " @ " << " " << tmp.Vj << " " << tmp.Qj << " " << tmp.Vk << endl;
-            //     cout << RoB.pre.hd + 1 << " @ " << RoB.pre.tl << endl;
-            //     for (int i = 0; i < 64; ++i)
-            //         if (RS.pre[i].busy && RS.pre[i].name == tmp.Qj) cout << " # # # " << endl;
-            // }
             RS.push(tmp);
             ReorderBuffer::node now;
             now.dest = ins.rd;
@@ -515,9 +478,6 @@ public:
             else if (rpos == alubus.name) tmp.Vk = alubus.val;
             else tmp.Qk = rpos;
             RS.push(tmp);
-
-            // cout << name << " ## " << endl;
-
             ReorderBuffer::node now;
             now.dest = -pc;
             if (BP.predict(pc)) // predict to jump
@@ -529,16 +489,13 @@ public:
         if (12 <= ins.type && ins.type <= 20) { // Arith : reg and imm
             ReservationStation::node tmp;
             tmp.busy = 1, tmp.op = ins.type, tmp.name = name;
-
             int rpos = reg.getr(ins.rs1);
             if (rpos == -1) tmp.Vj = reg.get(ins.rs1);
             else if (RoB.pre.q[rpos].ready) tmp.Vj = RoB.pre.q[rpos].value;
             else if (rpos == lsbus.name) tmp.Vj = lsbus.val;
             else if (rpos == alubus.name) tmp.Vj = alubus.val;
             else tmp.Qj = rpos;
-
             tmp.Vk = ins.imm;
-
             RS.push(tmp);
             ReorderBuffer::node now;
             now.dest = ins.rd;
@@ -549,23 +506,20 @@ public:
         if (21 <= ins.type && ins.type <= 30) { // Arith : reg and reg
             ReservationStation::node tmp;
             tmp.busy = 1, tmp.op = ins.type, tmp.name = name;
-
             int rpos = reg.getr(ins.rs1);
             if (rpos == -1) tmp.Vj = reg.get(ins.rs1);
             else if (RoB.pre.q[rpos].ready) tmp.Vj = RoB.pre.q[rpos].value;
             else if (rpos == lsbus.name) tmp.Vj = lsbus.val;
             else if (rpos == alubus.name) tmp.Vj = alubus.val;
             else tmp.Qj = rpos;
-
             rpos = reg.getr(ins.rs2);
             if (rpos == -1) tmp.Vk = reg.get(ins.rs2);
             else if (RoB.pre.q[rpos].ready) tmp.Vk = RoB.pre.q[rpos].value;
             else if (rpos == lsbus.name) tmp.Vk = lsbus.val;
             else if (rpos == alubus.name) tmp.Vk = alubus.val;
             else tmp.Qk = rpos;
-
-
             RS.push(tmp);
+
             ReorderBuffer::node now;
             now.dest = ins.rd;
             reg.setr(ins.rd, name);
@@ -575,25 +529,23 @@ public:
         if (31 <= ins.type && ins.type <= 35) { // Mem : load
             ReservationStation::node rs;
             rs.busy = 1, rs.op = ADD, rs.name = name + 256; // TODO: ATTENTION: one name, the same as lsb.Qj
-
             int rpos = reg.getr(ins.rs1);
             if (rpos == -1) rs.Vj = reg.get(ins.rs1);
             else if (RoB.pre.q[rpos].ready) rs.Vj = RoB.pre.q[rpos].value;
             else if (rpos == lsbus.name) rs.Vj = lsbus.val;
             else if (rpos == alubus.name) rs.Vj = alubus.val;
             else rs.Qj = rpos;
-
             rs.Vk = ins.imm;
-
             RS.push(rs);
+
             LoadStoreBuffer::node lsb;
             lsb.op = ins.type;
             lsb.Qj = name + 256;
             lsb.ready = 1;
             lsb.Vk = name;
             LSB.push(lsb);
-            ReorderBuffer::node rob;
 
+            ReorderBuffer::node rob;
             rob.dest = ins.rd;
             reg.setr(ins.rd, name);
             RoB.push(rob);
@@ -602,7 +554,6 @@ public:
         if (36 <= ins.type && ins.type <= 38) { // Mem : store
             ReservationStation::node rs;
             rs.busy = 1, rs.op = ADD, rs.name = name + 256;
-
             int rpos = reg.getr(ins.rs1);
             if (rpos == -1) rs.Vj = reg.get(ins.rs1);
             else if (RoB.pre.q[rpos].ready) rs.Vj = RoB.pre.q[rpos].value;
@@ -615,7 +566,6 @@ public:
             LoadStoreBuffer::node lsb;
             lsb.op = ins.type;
             lsb.Qj = name + 256;
-
             rpos = reg.getr(ins.rs2);
             if (rpos == -1) lsb.Vk = reg.get(ins.rs2);
             else if (RoB.pre.q[rpos].ready) lsb.Vk = RoB.pre.q[rpos].value;
